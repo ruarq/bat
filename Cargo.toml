@@ -4,4 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+atomic_float = "1.1.0"
 cpal = "0.16.0"
+crossbeam-channel = "0.5.15"
+eframe = "0.33.0"
+egui = "0.33.0"
+egui_extras = "0.33.0"
+rtrb = "0.3.2"

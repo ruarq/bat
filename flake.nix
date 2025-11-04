@@ -20,6 +20,12 @@
         buildInputs = with pkgs; [
           alsa-lib
         ];
+
+        LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
+          libGL
+          libxkbcommon
+          wayland
+        ];
       };
     }
   );
