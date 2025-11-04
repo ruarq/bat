@@ -40,7 +40,10 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             let data = match self.receiver.recv() {
                 Ok(data) => data,
-                Err(_) => Default::default(),
+                Err(e) => {
+                    /* eprintln!("failed to fetch analysis data: {}", e); */
+                    Default::default()
+                }
             };
 
             let (left, right) = data.rms;
@@ -51,6 +54,30 @@ impl eframe::App for App {
 
             ui.add(egui::ProgressBar::new(meter_left));
             ui.add(egui::ProgressBar::new(meter_right));
+
+            egui_plot::Plot::new("Frequency Spectrum")
+                .legend(egui_plot::Legend::default())
+                .clamp_grid(false)
+                .show(ui, |plot_ui| {
+                    plot_ui.bar_chart(
+                        egui_plot::BarChart::new(
+                            "barchart",
+                            data.spectrum
+                                .iter()
+                                .map(|c| c.re.abs())
+                                .enumerate()
+                                .map(|(x, r)| {
+                                    egui_plot::Bar::new(
+                                        (x as f64).log10().clamp(0.0, data.spectrum.len() as f64),
+                                        audio::make_meter(audio::as_decibel(r), (-96.0, 0.0))
+                                            as f64,
+                                    )
+                                })
+                                .collect(),
+                        )
+                        .width(0.01),
+                    )
+                });
 
             ctx.request_repaint();
         });

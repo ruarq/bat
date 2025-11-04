@@ -1,16 +1,21 @@
 use cpal::traits::{DeviceTrait, HostTrait};
+use realfft::{RealFftPlanner, num_complex::Complex};
 use std::{thread, time::Duration};
 
 pub const RING_BUFFER_CAPACITY: usize = 8192;
-pub const AUDIO_BUFFER_SIZE: usize = 2048;
+pub const AUDIO_BUFFER_SIZE: usize = 2048 * 2;
 
 pub struct AnalysisData {
     pub rms: (f32, f32),
+    pub spectrum: Vec<Complex<f32>>,
 }
 
 impl Default for AnalysisData {
     fn default() -> Self {
-        Self { rms: (0.0, 0.0) }
+        Self {
+            rms: (0.0, 0.0),
+            spectrum: Vec::new(),
+        }
     }
 }
 
@@ -20,6 +25,10 @@ pub fn analyze_audio(
 ) {
     let buffer_size = AUDIO_BUFFER_SIZE;
     let mut audio_buffer = vec![0.0f32; buffer_size];
+
+    let mut fft_planner = RealFftPlanner::new();
+    let fft = fft_planner.plan_fft_forward(buffer_size / 2);
+    let mut spectrum = fft.make_output_vec();
 
     loop {
         match audio_consumer.read_chunk(buffer_size) {
@@ -36,11 +45,27 @@ pub fn analyze_audio(
                 let left_rms = left.clone().map(|s| s * s).sum::<f32>() / left.len() as f32;
                 let right_rms = right.clone().map(|s| s * s).sum::<f32>() / right.len() as f32;
 
+                let mut mid: Vec<f32> = left
+                    .clone()
+                    .zip(right.clone())
+                    .map(|(l, r)| (l + r) / 2.0)
+                    .collect();
+
+                fft.process(&mut mid, &mut spectrum)
+                    .expect("fft.process(...): something went wrong");
+
+                spectrum
+                    .iter_mut()
+                    .for_each(|c| *c = *c / (mid.len() as f32).sqrt());
+
                 match ui_sender.send(AnalysisData {
                     rms: (left_rms, right_rms),
+                    spectrum: spectrum.clone(),
                 }) {
                     Ok(()) => {}
-                    Err(e) => eprintln!("analyze audio{}", e),
+                    Err(e) =>
+                        /* eprintln!("failed to send analysis data: {}", e) */
+                        {}
                 }
             }
             Err(_) => {
@@ -102,9 +127,7 @@ pub fn build_audio_input_stream(mut producer: rtrb::Producer<f32>) -> cpal::Stre
         Ok(chunk) => {
             chunk.fill_from_iter(data.iter().copied());
         }
-        Err(e) => {
-            eprintln!("error pushing audio data: {}", e);
-        }
+        Err(e) => { /* eprintln!("error pushing audio data: {}", e); */ }
     };
 
     let err_fn = |err| eprintln!("input stream error: {}", err);
