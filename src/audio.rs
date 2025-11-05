@@ -1,36 +1,65 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use realfft::{RealFftPlanner, num_complex::Complex};
-use std::{thread, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
-pub const RING_BUFFER_CAPACITY: usize = 8192;
-pub const AUDIO_BUFFER_SIZE: usize = 2048 * 2;
+pub const RING_BUFFER_CAPACITY: usize = 8192 * 2;
+//pub const AUDIO_BUFFER_SIZE: usize = 2048 * 2;
+//pub const FFT_BUFFER_SIZE: usize = AUDIO_BUFFER_SIZE / 2;
 
+#[derive(Clone)]
 pub struct AnalysisData {
-    pub rms: (f32, f32),
-    pub spectrum: Vec<Complex<f32>>,
+    pub rms_meter: (f32, f32),
+
+    /// normalized fft
+    pub spectrum: Vec<f32>,
+    pub _samples: Vec<f32>,
 }
 
 impl Default for AnalysisData {
     fn default() -> Self {
         Self {
-            rms: (0.0, 0.0),
+            rms_meter: (0.0, 0.0),
             spectrum: Vec::new(),
+            _samples: Vec::new(),
         }
     }
+}
+
+pub fn frequencies(fft_size: u32, sample_rate: u32) -> Vec<f32> {
+    let interval = sample_rate as f32 / fft_size as f32;
+    (0..fft_size).map(|k| k as f32 * interval).collect()
 }
 
 pub fn analyze_audio(
     mut audio_consumer: rtrb::Consumer<f32>,
     ui_sender: crossbeam_channel::Sender<AnalysisData>,
+    frame_buffer_size: Arc<AtomicUsize>,
 ) {
-    let buffer_size = AUDIO_BUFFER_SIZE;
+    let mut buffer_size = frame_buffer_size.load(Ordering::Relaxed);
+    let mut fft_size = buffer_size / 2; // assuming 2ch audio
     let mut audio_buffer = vec![0.0f32; buffer_size];
 
     let mut fft_planner = RealFftPlanner::new();
-    let fft = fft_planner.plan_fft_forward(buffer_size / 2);
+    let mut fft = fft_planner.plan_fft_forward(fft_size);
     let mut spectrum = fft.make_output_vec();
 
     loop {
+        let new_buffer_size = frame_buffer_size.load(Ordering::Relaxed);
+        if new_buffer_size != buffer_size {
+            buffer_size = new_buffer_size;
+            fft_size = buffer_size / 2;
+            audio_buffer.resize(buffer_size, 0.0);
+            fft = fft_planner.plan_fft_forward(buffer_size);
+            spectrum = fft.make_output_vec();
+        }
+
         match audio_consumer.read_chunk(buffer_size) {
             Ok(chunk) => {
                 for (dest, src) in audio_buffer.iter_mut().zip(chunk.into_iter()) {
@@ -51,19 +80,22 @@ pub fn analyze_audio(
                     .map(|(l, r)| (l + r) / 2.0)
                     .collect();
 
+                let samples = mid.iter().map(|s| *s).collect();
+
                 fft.process(&mut mid, &mut spectrum)
                     .expect("fft.process(...): something went wrong");
 
-                spectrum
-                    .iter_mut()
-                    .for_each(|c| *c = *c / (mid.len() as f32).sqrt());
+                let normalize = |c: &mut Complex<f32>| *c = 2.0 * *c / (fft_size as f32);
+
+                spectrum.iter_mut().for_each(normalize);
 
                 match ui_sender.send(AnalysisData {
-                    rms: (left_rms, right_rms),
-                    spectrum: spectrum.clone(),
+                    rms_meter: (left_rms, right_rms),
+                    spectrum: spectrum.iter().map(|c| c.re.abs()).collect(),
+                    _samples: samples,
                 }) {
                     Ok(()) => {}
-                    Err(e) =>
+                    Err(_) =>
                         /* eprintln!("failed to send analysis data: {}", e) */
                         {}
                 }
@@ -76,7 +108,9 @@ pub fn analyze_audio(
     }
 }
 
-pub fn build_audio_input_stream(mut producer: rtrb::Producer<f32>) -> cpal::Stream {
+pub fn build_audio_input_stream(
+    mut producer: rtrb::Producer<f32>,
+) -> (cpal::Stream, cpal::StreamConfig) {
     let host = cpal::default_host();
     host.input_devices()
         .expect("no input devices available")
@@ -127,16 +161,18 @@ pub fn build_audio_input_stream(mut producer: rtrb::Producer<f32>) -> cpal::Stre
         Ok(chunk) => {
             chunk.fill_from_iter(data.iter().copied());
         }
-        Err(e) => { /* eprintln!("error pushing audio data: {}", e); */ }
+        Err(_) => { /* eprintln!("error pushing audio data: {}", e); */ }
     };
 
     let err_fn = |err| eprintln!("input stream error: {}", err);
 
-    match format {
+    let stream = match format {
         cpal::SampleFormat::F32 => device.build_input_stream(&config, data_callback, err_fn, None),
         format => panic!("unsupported format: {}", format),
     }
-    .expect("couldn't build input stream")
+    .expect("couldn't build input stream");
+
+    (stream, config)
 }
 
 pub fn as_decibel(rms: f32) -> f32 {
@@ -150,4 +186,30 @@ pub fn as_decibel(rms: f32) -> f32 {
 pub fn make_meter(value: f32, range: (f32, f32)) -> f32 {
     let (lower, upper) = range;
     ((value - lower) / (upper - lower)).clamp(0.0, 1.0)
+}
+
+pub fn tilt(slope: f32, spectrum: &mut [f32]) {
+    let alpha = slope / (20.0 * 2.0f32.log10());
+    spectrum.iter_mut().enumerate().for_each(|(i, s)| {
+        let gain = (i as f32).powf(alpha);
+        *s *= gain;
+    })
+}
+
+pub fn smooth_linear(window_size: usize, spectrum: &mut [f32]) {
+    // TODO: can we eliminate this allocation?
+
+    let smoothed_spectrum: Vec<f32> = spectrum
+        .windows(window_size)
+        .map(|win| win.iter().sum::<f32>() / win.len() as f32)
+        .collect();
+
+    spectrum
+        .iter_mut()
+        .zip(smoothed_spectrum)
+        .for_each(|(s, t)| *s = t);
+}
+
+pub fn _smooth_logarithmic(_window_size: f32, _spectrum: &mut [f32]) {
+    todo!()
 }
