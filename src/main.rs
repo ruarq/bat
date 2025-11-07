@@ -26,7 +26,7 @@ fn main() -> eframe::Result {
     stream.play().unwrap();
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1240.0, 720.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1920.0, 1080.0]),
         ..Default::default()
     };
     let eframe_result = eframe::run_native(
@@ -194,21 +194,18 @@ impl App {
     fn draw_spectrum_plot(&mut self, ui: &mut egui::Ui) {
         let audio_buffer_size = self.audio_buffer_size.load(Ordering::Relaxed);
         let fft_buffer_size = audio_buffer_size / self.stream_config.channels as usize;
+
         let mut spectrum = self.analysis_data.spectrum.clone();
+
         audio::smooth_linear(self.spectrum_smoothing as usize, &mut spectrum);
         audio::tilt(self.spectrum_slope, &mut spectrum);
-
-        ui.add(egui::Label::new(format!(
-            "current fft size: {}",
-            fft_buffer_size,
-        )));
 
         let format_frequency = |f: f64| {
             let f = f.round();
             if f < 1000.0 {
                 format!("{}", f)
             } else {
-                format!("{}", f / 1000.0)
+                format!("{}k", f / 1000.0)
             }
         };
 
@@ -228,11 +225,11 @@ impl App {
             .default_y_bounds(self.meter_range.0 as f64, self.meter_range.1 as f64)
             .show(ui, |plot_ui| {
                 plot_ui.line(egui_plot::Line::new(
-                    "FFT",
+                    format!("FFT {}", fft_buffer_size),
                     audio::frequencies(fft_buffer_size as u32, self.stream_config.sample_rate.0)
                         .iter()
                         .zip(spectrum)
-                        //.skip(1)
+                        .skip(1)
                         .map(|(freq, amp)| {
                             [
                                 freq.log10() as f64,
