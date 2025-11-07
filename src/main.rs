@@ -15,7 +15,8 @@ fn main() -> eframe::Result {
 
     let (sender, receiver) = crossbeam_channel::bounded(1);
     let (producer, consumer) = rtrb::RingBuffer::new(audio::RING_BUFFER_CAPACITY);
-    let audio_buffer_size = Arc::new(AtomicUsize::new(2048));
+    let audio_buffer_size_selected = AudioBufferSize::default();
+    let audio_buffer_size = Arc::new(AtomicUsize::new(audio_buffer_size_selected as usize));
     let audio_buffer_size2 = audio_buffer_size.clone();
     let analyze_audio_thread =
         thread::spawn(|| audio::analyze_audio(consumer, sender, audio_buffer_size2));
@@ -38,6 +39,7 @@ fn main() -> eframe::Result {
                     spectrum_slope: 4.5,
                     analysis_data: Default::default(),
                     audio_buffer_size,
+                    audio_buffer_size_selected,
                 }
             }))
         }),
@@ -56,6 +58,22 @@ struct App {
     spectrum_slope: f32,
     analysis_data: AnalysisData,
     audio_buffer_size: Arc<AtomicUsize>,
+    audio_buffer_size_selected: AudioBufferSize,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(usize)]
+enum AudioBufferSize {
+    Small = 1 << 10,
+    Medium = 1 << 11,
+    Big = 1 << 12,
+    Huge = 1 << 13,
+}
+
+impl Default for AudioBufferSize {
+    fn default() -> Self {
+        Self::Medium
+    }
 }
 
 impl eframe::App for App {
@@ -81,6 +99,26 @@ impl eframe::App for App {
             ui.add(egui::ProgressBar::new(meter_left));
             ui.add(egui::ProgressBar::new(meter_right));
             ui.add(egui::Slider::new(&mut self.spectrum_slope, -10.0..=10.0));
+
+            let before = self.audio_buffer_size_selected;
+            egui::ComboBox::from_label("buffer size")
+                .selected_text(format!("{:?}", self.audio_buffer_size_selected))
+                .show_ui(ui, |ui| {
+                    use AudioBufferSize::*;
+                    let selectable = [Small, Medium, Big, Huge];
+                    for s in selectable {
+                        ui.selectable_value(
+                            &mut self.audio_buffer_size_selected,
+                            s,
+                            format!("{:?}", s),
+                        );
+                    }
+                });
+
+            if before != self.audio_buffer_size_selected {
+                self.audio_buffer_size
+                    .store(self.audio_buffer_size_selected as usize, Ordering::Relaxed);
+            }
 
             egui_plot::Plot::new("Frequency Spectrum")
                 .legend(egui_plot::Legend::default())

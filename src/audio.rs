@@ -19,7 +19,6 @@ pub struct AnalysisData {
 
     /// normalized fft
     pub spectrum: Vec<f32>,
-    pub _samples: Vec<f32>,
 }
 
 impl Default for AnalysisData {
@@ -27,22 +26,16 @@ impl Default for AnalysisData {
         Self {
             rms_meter: (0.0, 0.0),
             spectrum: Vec::new(),
-            _samples: Vec::new(),
         }
     }
-}
-
-pub fn frequencies(fft_size: u32, sample_rate: u32) -> Vec<f32> {
-    let interval = sample_rate as f32 / fft_size as f32;
-    (0..fft_size).map(|k| k as f32 * interval).collect()
 }
 
 pub fn analyze_audio(
     mut audio_consumer: rtrb::Consumer<f32>,
     ui_sender: crossbeam_channel::Sender<AnalysisData>,
-    frame_buffer_size: Arc<AtomicUsize>,
+    audio_buffer_size: Arc<AtomicUsize>,
 ) {
-    let mut buffer_size = frame_buffer_size.load(Ordering::Relaxed);
+    let mut buffer_size = audio_buffer_size.load(Ordering::Relaxed);
     let mut fft_size = buffer_size / 2; // assuming 2ch audio
     let mut audio_buffer = vec![0.0f32; buffer_size];
 
@@ -51,12 +44,12 @@ pub fn analyze_audio(
     let mut spectrum = fft.make_output_vec();
 
     loop {
-        let new_buffer_size = frame_buffer_size.load(Ordering::Relaxed);
+        let new_buffer_size = audio_buffer_size.load(Ordering::Relaxed);
         if new_buffer_size != buffer_size {
             buffer_size = new_buffer_size;
             fft_size = buffer_size / 2;
             audio_buffer.resize(buffer_size, 0.0);
-            fft = fft_planner.plan_fft_forward(buffer_size);
+            fft = fft_planner.plan_fft_forward(fft_size);
             spectrum = fft.make_output_vec();
         }
 
@@ -80,7 +73,7 @@ pub fn analyze_audio(
                     .map(|(l, r)| (l + r) / 2.0)
                     .collect();
 
-                let samples = mid.iter().map(|s| *s).collect();
+                //let samples = mid.iter().map(|s| *s).collect();
 
                 fft.process(&mut mid, &mut spectrum)
                     .expect("fft.process(...): something went wrong");
@@ -92,7 +85,6 @@ pub fn analyze_audio(
                 match ui_sender.send(AnalysisData {
                     rms_meter: (left_rms, right_rms),
                     spectrum: spectrum.iter().map(|c| c.re.abs()).collect(),
-                    _samples: samples,
                 }) {
                     Ok(()) => {}
                     Err(_) =>
@@ -186,6 +178,11 @@ pub fn as_decibel(rms: f32) -> f32 {
 pub fn make_meter(value: f32, range: (f32, f32)) -> f32 {
     let (lower, upper) = range;
     ((value - lower) / (upper - lower)).clamp(0.0, 1.0)
+}
+
+pub fn frequencies(fft_size: u32, sample_rate: u32) -> Vec<f32> {
+    let interval = sample_rate as f32 / fft_size as f32;
+    (0..fft_size).map(|k| k as f32 * interval).collect()
 }
 
 pub fn tilt(slope: f32, spectrum: &mut [f32]) {
