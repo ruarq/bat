@@ -128,11 +128,12 @@ impl App {
             .legend(egui_plot::Legend::default())
             .clamp_grid(false)
             .x_axis_label("Hz")
-            //.x_grid_spacer(egui_plot::log_grid_spacer(10))
+            .x_axis_formatter(|grid_mark, _| format!("{}", 10f64.powf(grid_mark.value)))
+            .x_grid_spacer(egui_plot::log_grid_spacer(10))
             .y_axis_label("dB")
             .allow_drag(false)
             .allow_scroll(false)
-            .default_x_bounds(1.0, 5.0)
+            .default_x_bounds(20f64.log10(), 20_000f64.log10())
             .default_y_bounds(self.meter_range.0 as f64, self.meter_range.1 as f64)
             .show(ui, |plot_ui| {
                 plot_ui.line(egui_plot::Line::new(
