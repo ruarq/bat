@@ -101,29 +101,31 @@ pub fn analyze_audio(
 }
 
 pub fn build_audio_input_stream(
+    device_index: usize,
     mut producer: rtrb::Producer<f32>,
-) -> (cpal::Stream, cpal::StreamConfig) {
+) -> (cpal::Host, cpal::Stream, cpal::StreamConfig) {
     let host = cpal::default_host();
-    host.input_devices()
-        .expect("no input devices available")
-        .enumerate()
-        .for_each(|(i, d)| {
-            println!(
-                "{} - {}",
-                i,
-                d.name().unwrap_or(String::from("NAME_UNKNOWN"))
-            )
-        });
 
-    print!(">>> ");
-    let mut device_index = String::new();
-    std::io::stdin()
-        .read_line(&mut device_index)
-        .expect("failed to read device index");
-    let device_index: usize = device_index
-        .trim()
-        .parse()
-        .expect("failed to parse device_index");
+    //host.input_devices()
+    //    .expect("no input devices available")
+    //    .enumerate()
+    //    .for_each(|(i, d)| {
+    //        println!(
+    //            "{} - {}",
+    //            i,
+    //            d.name().unwrap_or(String::from("NAME_UNKNOWN"))
+    //        )
+    //    });
+
+    //print!(">>> ");
+    //let mut device_index = String::new();
+    //std::io::stdin()
+    //    .read_line(&mut device_index)
+    //    .expect("failed to read device index");
+    //let device_index: usize = device_index
+    //    .trim()
+    //    .parse()
+    //  .expect("failed to parse device_index");
 
     let device = host
         .input_devices()
@@ -164,7 +166,7 @@ pub fn build_audio_input_stream(
     }
     .expect("couldn't build input stream");
 
-    (stream, config)
+    (host, stream, config)
 }
 
 pub fn as_decibel(rms: f32) -> f32 {

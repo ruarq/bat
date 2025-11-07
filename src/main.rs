@@ -1,13 +1,13 @@
 mod audio;
 
 use audio::AnalysisData;
-use cpal::traits::StreamTrait;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::{
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    thread,
+    thread::{self, JoinHandle},
 };
 
 fn main() -> eframe::Result {
@@ -18,10 +18,10 @@ fn main() -> eframe::Result {
     let audio_buffer_size_selected = AudioBufferSize::default();
     let audio_buffer_size = Arc::new(AtomicUsize::new(audio_buffer_size_selected as usize));
     let audio_buffer_size2 = audio_buffer_size.clone();
-    let analyze_audio_thread =
+    let analysis_thread =
         thread::spawn(|| audio::analyze_audio(consumer, sender, audio_buffer_size2));
 
-    let (stream, stream_config) = audio::build_audio_input_stream(producer);
+    let (host, stream, stream_config) = audio::build_audio_input_stream(0, producer);
     stream.play().unwrap();
 
     let options = eframe::NativeOptions {
@@ -34,9 +34,12 @@ fn main() -> eframe::Result {
         Box::new(|_| {
             Ok(Box::<App>::new({
                 App {
+                    host,
                     stream,
                     stream_config,
                     stream_playing: true,
+                    analysis_thread,
+                    audio_device_index: 0,
                     receiver,
                     spectrum_slope: 4.5,
                     analysis_data: Default::default(),
@@ -48,23 +51,22 @@ fn main() -> eframe::Result {
         }),
     );
 
-    analyze_audio_thread
-        .join()
-        .expect("failed to join analyze_audio_thread");
-
     return eframe_result;
 }
 
 struct App {
+    host: cpal::Host,
     stream: cpal::Stream,
     stream_config: cpal::StreamConfig,
     stream_playing: bool,
+    analysis_thread: JoinHandle<()>,
+    audio_device_index: usize,
     receiver: crossbeam_channel::Receiver<AnalysisData>,
     spectrum_slope: f32,
     analysis_data: AnalysisData,
     audio_buffer_size: Arc<AtomicUsize>,
     audio_buffer_size_selected: AudioBufferSize,
-    meter_range: (f32, f32), // (-96.0, 0.0),
+    meter_range: (f32, f32),
 }
 
 impl eframe::App for App {
@@ -88,6 +90,7 @@ impl App {
     fn draw_controls(&mut self, ui: &mut egui::Ui) {
         let audio_buffer_size_before = self.audio_buffer_size_selected;
         let stream_playing_before = self.stream_playing;
+        let audio_device_index_before = self.audio_device_index;
 
         ui.add(egui::Slider::new(&mut self.spectrum_slope, 0.0..=6.0));
         if ui
@@ -115,6 +118,27 @@ impl App {
                 }
             });
 
+        egui::ComboBox::from_label("audio input device")
+            .selected_text(format!(
+                "{}",
+                self.host
+                    .input_devices()
+                    .unwrap()
+                    .nth(self.audio_device_index)
+                    .unwrap()
+                    .name()
+                    .unwrap()
+            ))
+            .show_ui(ui, |ui| {
+                for (i, d) in self.host.input_devices().unwrap().enumerate() {
+                    ui.selectable_value(
+                        &mut self.audio_device_index,
+                        i,
+                        format!("{}", d.name().unwrap()),
+                    );
+                }
+            });
+
         if audio_buffer_size_before != self.audio_buffer_size_selected {
             self.audio_buffer_size
                 .store(self.audio_buffer_size_selected as usize, Ordering::Relaxed);
@@ -127,6 +151,18 @@ impl App {
                 self.stream.pause().unwrap();
             }
         }
+
+        if audio_device_index_before != self.audio_device_index {
+            self.stream.pause().unwrap();
+            let (producer, consumer) = rtrb::RingBuffer::new(audio::RING_BUFFER_CAPACITY);
+            let (sender, receiver) = crossbeam_channel::bounded(1);
+            let audio_buffer_size = self.audio_buffer_size.clone();
+            (self.host, self.stream, self.stream_config) =
+                audio::build_audio_input_stream(self.audio_device_index, producer);
+            self.analysis_thread =
+                thread::spawn(|| audio::analyze_audio(consumer, sender, audio_buffer_size));
+            self.receiver = receiver;
+        }
     }
 
     fn draw_rms_meter(&mut self, ui: &mut egui::Ui) {
@@ -136,6 +172,25 @@ impl App {
 
         ui.add(egui::ProgressBar::new(meter_left));
         ui.add(egui::ProgressBar::new(meter_right));
+    }
+
+    fn spectrum_grid_stage(step_size: f64) -> Vec<egui_plot::GridMark> {
+        (1..=10)
+            .map(|i| egui_plot::GridMark {
+                value: (step_size * i as f64).log10(),
+                step_size: step_size.log10(),
+            })
+            .collect()
+    }
+
+    fn spectrum_grid(_: egui_plot::GridInput) -> Vec<egui_plot::GridMark> {
+        let mut marks = Vec::new();
+
+        marks.append(&mut Self::spectrum_grid_stage(10.0));
+        marks.append(&mut Self::spectrum_grid_stage(100.0));
+        marks.append(&mut Self::spectrum_grid_stage(1000.0));
+
+        marks
     }
 
     fn draw_spectrum_plot(&mut self, ui: &mut egui::Ui) {
@@ -153,8 +208,8 @@ impl App {
             .legend(egui_plot::Legend::default())
             .clamp_grid(false)
             .x_axis_label("Hz")
-            .x_axis_formatter(|grid_mark, _| format!("{}", 10f64.powf(grid_mark.value)))
-            .x_grid_spacer(egui_plot::log_grid_spacer(10))
+            .x_axis_formatter(|grid_mark, _| format!("{}", (10f64.powf(grid_mark.value) as i32)))
+            .x_grid_spacer(Self::spectrum_grid)
             .y_axis_label("dB")
             .allow_drag(false)
             .allow_scroll(false)
