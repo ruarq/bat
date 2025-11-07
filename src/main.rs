@@ -22,7 +22,7 @@ fn main() -> eframe::Result {
         thread::spawn(|| audio::analyze_audio(consumer, sender, audio_buffer_size2));
 
     let (stream, stream_config) = audio::build_audio_input_stream(producer);
-    stream.play().expect("unable to start stream");
+    stream.play().unwrap();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1240.0, 720.0]),
@@ -34,7 +34,9 @@ fn main() -> eframe::Result {
         Box::new(|_| {
             Ok(Box::<App>::new({
                 App {
+                    stream,
                     stream_config,
+                    stream_playing: true,
                     receiver,
                     spectrum_slope: 4.5,
                     analysis_data: Default::default(),
@@ -54,7 +56,9 @@ fn main() -> eframe::Result {
 }
 
 struct App {
+    stream: cpal::Stream,
     stream_config: cpal::StreamConfig,
+    stream_playing: bool,
     receiver: crossbeam_channel::Receiver<AnalysisData>,
     spectrum_slope: f32,
     analysis_data: AnalysisData,
@@ -82,9 +86,21 @@ impl eframe::App for App {
 
 impl App {
     fn draw_controls(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.spectrum_slope, 0.0..=6.0));
+        let audio_buffer_size_before = self.audio_buffer_size_selected;
+        let stream_playing_before = self.stream_playing;
 
-        let before = self.audio_buffer_size_selected;
+        ui.add(egui::Slider::new(&mut self.spectrum_slope, 0.0..=6.0));
+        if ui
+            .add(egui::Button::new(if self.stream_playing {
+                "playing"
+            } else {
+                "paused"
+            }))
+            .clicked()
+        {
+            self.stream_playing = !self.stream_playing;
+        }
+
         egui::ComboBox::from_label("audio buffer size")
             .selected_text(format!("{}", self.audio_buffer_size_selected as usize))
             .show_ui(ui, |ui| {
@@ -99,9 +115,17 @@ impl App {
                 }
             });
 
-        if before != self.audio_buffer_size_selected {
+        if audio_buffer_size_before != self.audio_buffer_size_selected {
             self.audio_buffer_size
                 .store(self.audio_buffer_size_selected as usize, Ordering::Relaxed);
+        }
+
+        if stream_playing_before != self.stream_playing {
+            if self.stream_playing {
+                self.stream.play().unwrap();
+            } else {
+                self.stream.pause().unwrap();
+            }
         }
     }
 
@@ -124,6 +148,7 @@ impl App {
             "current fft size: {}",
             (spectrum.len() - 1) * 2
         )));
+
         egui_plot::Plot::new("Frequency Spectrum")
             .legend(egui_plot::Legend::default())
             .clamp_grid(false)
