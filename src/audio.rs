@@ -10,6 +10,7 @@ use std::{
 };
 
 pub const RING_BUFFER_CAPACITY: usize = 8192 * 2;
+pub const CROSSBEAM_CHANNEL_CAPACITY: usize = 1;
 //pub const AUDIO_BUFFER_SIZE: usize = 2048 * 2;
 //pub const FFT_BUFFER_SIZE: usize = AUDIO_BUFFER_SIZE / 2;
 
@@ -105,27 +106,6 @@ pub fn build_audio_input_stream(
     mut producer: rtrb::Producer<f32>,
 ) -> (cpal::Host, cpal::Stream, cpal::StreamConfig) {
     let host = cpal::default_host();
-
-    //host.input_devices()
-    //    .expect("no input devices available")
-    //    .enumerate()
-    //    .for_each(|(i, d)| {
-    //        println!(
-    //            "{} - {}",
-    //            i,
-    //            d.name().unwrap_or(String::from("NAME_UNKNOWN"))
-    //        )
-    //    });
-
-    //print!(">>> ");
-    //let mut device_index = String::new();
-    //std::io::stdin()
-    //    .read_line(&mut device_index)
-    //    .expect("failed to read device index");
-    //let device_index: usize = device_index
-    //    .trim()
-    //    .parse()
-    //  .expect("failed to parse device_index");
 
     let device = host
         .input_devices()

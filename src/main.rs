@@ -13,7 +13,7 @@ use std::{
 fn main() -> eframe::Result {
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    let (sender, receiver) = crossbeam_channel::bounded(1);
+    let (sender, receiver) = crossbeam_channel::bounded(audio::CROSSBEAM_CHANNEL_CAPACITY);
     let (producer, consumer) = rtrb::RingBuffer::new(audio::RING_BUFFER_CAPACITY);
     let audio_buffer_size_selected = AudioBufferSize::default();
     let audio_buffer_size = Arc::new(AtomicUsize::new(audio_buffer_size_selected as usize));
@@ -42,6 +42,7 @@ fn main() -> eframe::Result {
                     audio_device_index: 0,
                     receiver,
                     spectrum_slope: 4.5,
+                    spectrum_range: (20.0, 20000.0),
                     analysis_data: Default::default(),
                     audio_buffer_size,
                     audio_buffer_size_selected,
@@ -63,6 +64,7 @@ struct App {
     audio_device_index: usize,
     receiver: crossbeam_channel::Receiver<AnalysisData>,
     spectrum_slope: f32,
+    spectrum_range: (f32, f32),
     analysis_data: AnalysisData,
     audio_buffer_size: Arc<AtomicUsize>,
     audio_buffer_size_selected: AudioBufferSize,
@@ -155,7 +157,7 @@ impl App {
         if audio_device_index_before != self.audio_device_index {
             self.stream.pause().unwrap();
             let (producer, consumer) = rtrb::RingBuffer::new(audio::RING_BUFFER_CAPACITY);
-            let (sender, receiver) = crossbeam_channel::bounded(1);
+            let (sender, receiver) = crossbeam_channel::bounded(audio::CROSSBEAM_CHANNEL_CAPACITY);
             let audio_buffer_size = self.audio_buffer_size.clone();
             (self.host, self.stream, self.stream_config) =
                 audio::build_audio_input_stream(self.audio_device_index, producer);
@@ -213,7 +215,10 @@ impl App {
             .y_axis_label("dB")
             .allow_drag(false)
             .allow_scroll(false)
-            .default_x_bounds(20f64.log10(), 20_000f64.log10())
+            .default_x_bounds(
+                self.spectrum_range.0.log10() as f64,
+                self.spectrum_range.1.log10() as f64,
+            )
             .default_y_bounds(self.meter_range.0 as f64, self.meter_range.1 as f64)
             .show(ui, |plot_ui| {
                 plot_ui.line(egui_plot::Line::new(
