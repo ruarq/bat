@@ -8,11 +8,10 @@ use std::{
     thread,
     time::Duration,
 };
+use strum::{Display, EnumIter};
 
 pub const RING_BUFFER_CAPACITY: usize = 8192 * 2;
 pub const CROSSBEAM_CHANNEL_CAPACITY: usize = 1;
-//pub const AUDIO_BUFFER_SIZE: usize = 2048 * 2;
-//pub const FFT_BUFFER_SIZE: usize = AUDIO_BUFFER_SIZE / 2;
 
 #[derive(Clone)]
 pub struct AnalysisData {
@@ -28,6 +27,21 @@ impl Default for AnalysisData {
             rms_meter: (0.0, 0.0),
             spectrum: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy, EnumIter, Display)]
+#[repr(usize)]
+pub enum AudioBufferSize {
+    Small = 1 << 10,
+    Medium = 1 << 11,
+    Big = 1 << 12,
+    Huge = 1 << 13,
+}
+
+impl Default for AudioBufferSize {
+    fn default() -> Self {
+        Self::Medium
     }
 }
 

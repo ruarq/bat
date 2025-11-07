@@ -1,6 +1,6 @@
 mod audio;
 
-use audio::AnalysisData;
+use audio::{AnalysisData, AudioBufferSize};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::{
     sync::{
@@ -9,6 +9,7 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
+use strum::IntoEnumIterator;
 
 fn main() -> eframe::Result {
     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -67,7 +68,7 @@ struct App {
     spectrum_range: (f32, f32),
     analysis_data: AnalysisData,
     audio_buffer_size: Arc<AtomicUsize>,
-    audio_buffer_size_selected: AudioBufferSize,
+    audio_buffer_size_selected: audio::AudioBufferSize,
     meter_range: (f32, f32),
 }
 
@@ -109,13 +110,11 @@ impl App {
         egui::ComboBox::from_label("audio buffer size")
             .selected_text(format!("{}", self.audio_buffer_size_selected as usize))
             .show_ui(ui, |ui| {
-                use AudioBufferSize::*;
-                let selectable = [Small, Medium, Big, Huge];
-                for s in selectable {
+                for s in AudioBufferSize::iter() {
                     ui.selectable_value(
                         &mut self.audio_buffer_size_selected,
                         s,
-                        format!("{}", s as usize),
+                        format!("{} ({})", s, s as usize),
                     );
                 }
             });
@@ -239,20 +238,5 @@ impl App {
                     .collect::<egui_plot::PlotPoints<'_>>(),
                 ))
             });
-    }
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-#[repr(usize)]
-enum AudioBufferSize {
-    Small = 1 << 10,
-    Medium = 1 << 11,
-    Big = 1 << 12,
-    Huge = 1 << 13,
-}
-
-impl Default for AudioBufferSize {
-    fn default() -> Self {
-        Self::Medium
     }
 }

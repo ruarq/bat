@@ -13,3 +13,4 @@ egui_extras = "0.33.0"
 egui_plot = "0.34.0"
 realfft = "3.5.0"
 rtrb = "0.3.2"
+strum = { version = "0.27.2", features = ["derive"] }
