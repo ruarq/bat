@@ -1,6 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use realfft::{RealFftPlanner, num_complex::Complex};
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -10,7 +11,7 @@ use std::{
 };
 use strum::{Display, EnumIter};
 
-pub const RING_BUFFER_CAPACITY: usize = 8192 * 2;
+pub const RING_BUFFER_CAPACITY: usize = 8192;
 pub const CROSSBEAM_CHANNEL_CAPACITY: usize = 1;
 
 #[derive(Clone)]
@@ -50,9 +51,10 @@ pub fn analyze_audio(
     ui_sender: crossbeam_channel::Sender<AnalysisData>,
     audio_buffer_size: Arc<AtomicUsize>,
 ) {
+    let buffer_increment = 2048;
     let mut buffer_size = audio_buffer_size.load(Ordering::Relaxed);
     let mut fft_size = buffer_size / 2; // assuming 2ch audio
-    let mut audio_buffer = vec![0.0f32; buffer_size];
+    let mut audio_buffer: VecDeque<f32> = vec![0.0f32; buffer_size].into();
 
     let mut fft_planner = RealFftPlanner::new();
     let mut fft = fft_planner.plan_fft_forward(fft_size);
@@ -68,49 +70,56 @@ pub fn analyze_audio(
             spectrum = fft.make_output_vec();
         }
 
-        match audio_consumer.read_chunk(buffer_size) {
-            Ok(chunk) => {
-                for (dest, src) in audio_buffer.iter_mut().zip(chunk.into_iter()) {
-                    *dest = src;
+        let mut samples_to_read = audio_consumer.slots();
+        while samples_to_read > buffer_increment {
+            match audio_consumer.read_chunk(buffer_increment) {
+                Ok(chunk) => {
+                    //for (dest, src) in audio_buffer.iter_mut().zip(chunk.into_iter()) {
+                    //    *dest = src;
+                    //}
+
+                    audio_buffer.extend(chunk.into_iter());
+                    samples_to_read -= buffer_increment;
                 }
-
-                let left = audio_buffer.iter().step_by(2);
-                let mut right = audio_buffer.iter();
-                right.next();
-                let right = right.step_by(2);
-
-                let left_rms = left.clone().map(|s| s * s).sum::<f32>() / left.len() as f32;
-                let right_rms = right.clone().map(|s| s * s).sum::<f32>() / right.len() as f32;
-
-                let mut mid: Vec<f32> = left
-                    .clone()
-                    .zip(right.clone())
-                    .map(|(l, r)| (l + r) / 2.0)
-                    .collect();
-
-                //let samples = mid.iter().map(|s| *s).collect();
-
-                fft.process(&mut mid, &mut spectrum)
-                    .expect("fft.process(...): something went wrong");
-
-                let normalize = |c: &mut Complex<f32>| *c = 2.0 * *c / (fft_size as f32);
-
-                spectrum.iter_mut().for_each(normalize);
-
-                match ui_sender.send(AnalysisData {
-                    rms_meter: (left_rms, right_rms),
-                    spectrum: spectrum.iter().map(|c| c.re.abs()).collect(),
-                }) {
-                    Ok(()) => {}
-                    Err(_) =>
-                        /* eprintln!("failed to send analysis data: {}", e) */
-                        {}
-                }
+                Err(_) => {}
             }
-            Err(_) => {
-                thread::sleep(Duration::from_millis(5));
-                continue;
-            }
+        }
+
+        if audio_buffer.len() > buffer_size {
+            audio_buffer.drain(..(audio_buffer.len() - buffer_size));
+        }
+
+        let left = audio_buffer.iter().step_by(2);
+        let mut right = audio_buffer.iter();
+        right.next();
+        let right = right.step_by(2);
+
+        let left_rms = left.clone().map(|s| s * s).sum::<f32>() / left.len() as f32;
+        let right_rms = right.clone().map(|s| s * s).sum::<f32>() / right.len() as f32;
+
+        let mut mid: Vec<f32> = left
+            .clone()
+            .zip(right.clone())
+            .map(|(l, r)| (l + r) / 2.0)
+            .collect();
+
+        //let samples = mid.iter().map(|s| *s).collect();
+
+        fft.process(&mut mid, &mut spectrum)
+            .expect("fft.process(...): something went wrong");
+
+        let normalize = |c: &mut Complex<f32>| *c = 2.0 * *c / (fft_size as f32);
+
+        spectrum.iter_mut().for_each(normalize);
+
+        match ui_sender.send(AnalysisData {
+            rms_meter: (left_rms, right_rms),
+            spectrum: spectrum.iter().map(|c| c.re.abs()).collect(),
+        }) {
+            Ok(()) => {}
+            Err(_) =>
+                /* eprintln!("failed to send analysis data: {}", e) */
+                {}
         }
     }
 }
