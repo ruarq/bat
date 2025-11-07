@@ -44,6 +44,7 @@ fn main() -> eframe::Result {
                     receiver,
                     spectrum_slope: 4.5,
                     spectrum_range: (20.0, 20000.0),
+                    spectrum_smoothing: 5,
                     analysis_data: Default::default(),
                     audio_buffer_size,
                     audio_buffer_size_selected,
@@ -66,6 +67,7 @@ struct App {
     receiver: crossbeam_channel::Receiver<AnalysisData>,
     spectrum_slope: f32,
     spectrum_range: (f32, f32),
+    spectrum_smoothing: u8,
     analysis_data: AnalysisData,
     audio_buffer_size: Arc<AtomicUsize>,
     audio_buffer_size_selected: audio::AudioBufferSize,
@@ -91,11 +93,9 @@ impl eframe::App for App {
 
 impl App {
     fn draw_controls(&mut self, ui: &mut egui::Ui) {
-        let audio_buffer_size_before = self.audio_buffer_size_selected;
-        let stream_playing_before = self.stream_playing;
-        let audio_device_index_before = self.audio_device_index;
-
         ui.add(egui::Slider::new(&mut self.spectrum_slope, 0.0..=6.0));
+        ui.add(egui::Slider::new(&mut self.spectrum_smoothing, 1..=10));
+
         if ui
             .add(egui::Button::new(if self.stream_playing {
                 "playing"
@@ -105,8 +105,14 @@ impl App {
             .clicked()
         {
             self.stream_playing = !self.stream_playing;
+            if self.stream_playing {
+                self.stream.play().unwrap();
+            } else {
+                self.stream.pause().unwrap();
+            }
         }
 
+        let audio_buffer_size_before = self.audio_buffer_size_selected;
         egui::ComboBox::from_label("audio buffer size")
             .selected_text(format!("{}", self.audio_buffer_size_selected as usize))
             .show_ui(ui, |ui| {
@@ -118,7 +124,12 @@ impl App {
                     );
                 }
             });
+        if audio_buffer_size_before != self.audio_buffer_size_selected {
+            self.audio_buffer_size
+                .store(self.audio_buffer_size_selected as usize, Ordering::Relaxed);
+        }
 
+        let audio_device_index_before = self.audio_device_index;
         egui::ComboBox::from_label("audio input device")
             .selected_text(format!(
                 "{}",
@@ -139,20 +150,6 @@ impl App {
                     );
                 }
             });
-
-        if audio_buffer_size_before != self.audio_buffer_size_selected {
-            self.audio_buffer_size
-                .store(self.audio_buffer_size_selected as usize, Ordering::Relaxed);
-        }
-
-        if stream_playing_before != self.stream_playing {
-            if self.stream_playing {
-                self.stream.play().unwrap();
-            } else {
-                self.stream.pause().unwrap();
-            }
-        }
-
         if audio_device_index_before != self.audio_device_index {
             self.stream.pause().unwrap();
             let (producer, consumer) = rtrb::RingBuffer::new(audio::RING_BUFFER_CAPACITY);
@@ -196,20 +193,30 @@ impl App {
 
     fn draw_spectrum_plot(&mut self, ui: &mut egui::Ui) {
         let audio_buffer_size = self.audio_buffer_size.load(Ordering::Relaxed);
+        let fft_buffer_size = audio_buffer_size / self.stream_config.channels as usize;
         let mut spectrum = self.analysis_data.spectrum.clone();
-        audio::smooth_linear(5, &mut spectrum);
+        audio::smooth_linear(self.spectrum_smoothing as usize, &mut spectrum);
         audio::tilt(self.spectrum_slope, &mut spectrum);
 
         ui.add(egui::Label::new(format!(
             "current fft size: {}",
-            (spectrum.len() - 1) * 2
+            fft_buffer_size,
         )));
+
+        let format_frequency = |f: f64| {
+            let f = f.round();
+            if f < 1000.0 {
+                format!("{}", f)
+            } else {
+                format!("{}", f / 1000.0)
+            }
+        };
 
         egui_plot::Plot::new("Frequency Spectrum")
             .legend(egui_plot::Legend::default())
             .clamp_grid(false)
             .x_axis_label("Hz")
-            .x_axis_formatter(|grid_mark, _| format!("{}", (10f64.powf(grid_mark.value) as i32)))
+            .x_axis_formatter(|grid_mark, _| format_frequency(10f64.powf(grid_mark.value)))
             .x_grid_spacer(Self::spectrum_grid)
             .y_axis_label("dB")
             .allow_drag(false)
@@ -222,20 +229,17 @@ impl App {
             .show(ui, |plot_ui| {
                 plot_ui.line(egui_plot::Line::new(
                     "FFT",
-                    audio::frequencies(
-                        audio_buffer_size as u32 / self.stream_config.channels as u32,
-                        self.stream_config.sample_rate.0,
-                    )
-                    .iter()
-                    .zip(spectrum)
-                    //.skip(1)
-                    .map(|(freq, amp)| {
-                        [
-                            freq.log10() as f64,
-                            audio::as_decibel(amp).max(-1e10) as f64,
-                        ]
-                    })
-                    .collect::<egui_plot::PlotPoints<'_>>(),
+                    audio::frequencies(fft_buffer_size as u32, self.stream_config.sample_rate.0)
+                        .iter()
+                        .zip(spectrum)
+                        //.skip(1)
+                        .map(|(freq, amp)| {
+                            [
+                                freq.log10() as f64,
+                                audio::as_decibel(amp).max(-1e10) as f64,
+                            ]
+                        })
+                        .collect::<egui_plot::PlotPoints<'_>>(),
                 ))
             });
     }
