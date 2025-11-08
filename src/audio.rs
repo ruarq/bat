@@ -145,7 +145,7 @@ pub fn analyze_audio(
 
         match ui_sender.send(AnalysisData {
             rms_meter: (left_rms, right_rms),
-            spectrum: spectrum.iter().map(|c| c.re.abs()).collect(),
+            spectrum: spectrum.iter().skip(1).map(|c| c.re.abs()).collect(),
             elapsed: end - start,
         }) {
             Ok(()) => {}
@@ -221,9 +221,9 @@ pub fn make_meter(value: f32, range: (f32, f32)) -> f32 {
     ((value - lower) / (upper - lower)).clamp(0.0, 1.0)
 }
 
-pub fn frequencies(fft_size: u32, sample_rate: u32) -> Vec<f32> {
-    let interval = sample_rate as f32 / fft_size as f32;
-    (0..fft_size).map(|k| k as f32 * interval).collect()
+pub fn frequencies(num_bins: u32, sample_rate: u32) -> Vec<f32> {
+    let interval = sample_rate as f32 / (num_bins * 2) as f32;
+    (1..=num_bins).map(|k| k as f32 * interval).collect()
 }
 
 pub fn frequency_resolution(fft_buffer_size: u32, sample_rate: u32) -> f32 {
@@ -233,7 +233,7 @@ pub fn frequency_resolution(fft_buffer_size: u32, sample_rate: u32) -> f32 {
 pub fn tilt(slope: f32, spectrum: &mut [f32]) {
     let alpha = slope / (20.0 * 2.0f32.log10());
     spectrum.iter_mut().enumerate().for_each(|(i, s)| {
-        let gain = (i as f32).powf(alpha);
+        let gain = ((i + 1) as f32).powf(alpha);
         *s *= gain;
     })
 }
@@ -297,3 +297,5 @@ pub fn smooth_log(
 
     (smooth_spectrum, frequencies)
 }
+//
+//pub fn translate

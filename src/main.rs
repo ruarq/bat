@@ -1,7 +1,9 @@
 mod audio;
+mod led;
 
 use audio::{AnalysisData, AudioBufferSize};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use led::LedStrip;
 use std::{
     sync::{
         Arc,
@@ -45,6 +47,18 @@ fn main() -> eframe::Result {
         audio_buffer_size_selected,
         sample_rate,
         meter_range: (-96.0, 12.0),
+        led_strips: vec![
+            LedStrip::with_size(10),
+            LedStrip::with_size(20),
+            LedStrip::with_size(30),
+            LedStrip::with_size(40),
+            LedStrip::with_size(50),
+            LedStrip::with_size(60),
+            LedStrip::with_size(70),
+            LedStrip::with_size(80),
+            LedStrip::with_size(90),
+            LedStrip::with_size(100),
+        ],
     };
 
     let options = eframe::NativeOptions {
@@ -99,6 +113,7 @@ struct App {
     audio_buffer_size_selected: audio::AudioBufferSize,
     sample_rate: audio::SampleRate,
     meter_range: (f32, f32),
+    led_strips: Vec<LedStrip>,
 }
 
 impl eframe::App for App {
@@ -124,7 +139,54 @@ impl eframe::App for App {
                 });
             }
 
-            Panel::Leds => {}
+            Panel::Leds => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (w, h) = (10.0, 10.0);
+                    for (strip_num, strip) in &mut self.led_strips.iter_mut().enumerate() {
+                        let rms =
+                            (self.analysis_data.rms_meter.0 + self.analysis_data.rms_meter.1) / 2.0;
+                        let meter = audio::make_meter(audio::as_decibel(rms), self.meter_range);
+                        let mut spectrum = self.analysis_data.spectrum.clone();
+                        spectrum.iter_mut().for_each(|s| {
+                            *s = audio::make_meter(audio::as_decibel(*s), self.meter_range)
+                        });
+                        audio::tilt(self.spectrum_slope, &mut spectrum);
+
+                        match strip_num % 3 {
+                            0 => strip.amp(meter),
+                            1 => strip.biamp(meter),
+                            2 => strip.spectrum(
+                                &spectrum,
+                                &audio::frequencies(spectrum.len() as u32, self.sample_rate as u32),
+                            ),
+                            _ => panic!("impossible"),
+                        }
+
+                        //if strip_num % 2 == 0 {
+                        //    strip.amp(meter);
+                        //} else {
+                        //    strip.biamp(meter);
+                        //};
+
+                        let (response, painter) = ui.allocate_painter(
+                            egui::vec2(strip.data.len() as f32 * (w + 1.0), h),
+                            egui::Sense::hover(),
+                        );
+
+                        for (i, rgb) in strip.data.iter().enumerate() {
+                            let (x, y) = (w * i as f32, 0.0);
+                            painter.rect_filled(
+                                egui::Rect {
+                                    min: response.rect.min + egui::vec2(x, y),
+                                    max: response.rect.min + egui::vec2(x + w, y + h),
+                                },
+                                egui::CornerRadius::ZERO,
+                                egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b),
+                            );
+                        }
+                    }
+                });
+            }
         }
 
         egui::Window::new("Statistics").show(ctx, |ui| {
@@ -336,7 +398,7 @@ impl App {
     fn draw_spectrum_plot(&mut self, ui: &mut egui::Ui) {
         let mut spectrum = self.analysis_data.spectrum.clone();
         let fft_buffer_size = self.audio_buffer_size_selected as usize / 2;
-        let mut frequencies = audio::frequencies(fft_buffer_size as u32, self.sample_rate as u32);
+        let mut frequencies = audio::frequencies(spectrum.len() as u32, self.sample_rate as u32);
 
         use SpectrumSmoothing::*;
         match self.spectrum_smoothing {
@@ -383,7 +445,6 @@ impl App {
                     frequencies
                         .iter()
                         .zip(spectrum)
-                        .skip(1)
                         .map(|(freq, amp)| {
                             [
                                 freq.log10() as f64,
