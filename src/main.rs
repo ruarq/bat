@@ -9,7 +9,7 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
-use strum::IntoEnumIterator;
+use strum::{Display, EnumIter, IntoEnumIterator};
 
 fn main() -> eframe::Result {
     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -27,6 +27,7 @@ fn main() -> eframe::Result {
     stream.play().unwrap();
 
     let app = App {
+        panel: Default::default(),
         host,
         stream,
         stream_config,
@@ -52,7 +53,20 @@ fn main() -> eframe::Result {
     eframe::run_native("bat", options, Box::new(|_| Ok(Box::new(app))))
 }
 
+#[derive(Debug, EnumIter, Display, PartialEq, Clone, Copy)]
+enum Panel {
+    AudioVisualization,
+    Leds,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self::AudioVisualization
+    }
+}
+
 struct App {
+    panel: Panel,
     host: cpal::Host,
     stream: cpal::Stream,
     stream_config: cpal::StreamConfig,
@@ -72,22 +86,43 @@ struct App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.receiver.try_recv() {
-                Ok(data) => self.analysis_data = data,
-                Err(e) => eprintln!("ui thread: {}", e),
-            };
+        match self.receiver.try_recv() {
+            Ok(data) => self.analysis_data = data,
+            Err(e) => eprintln!("ui thread: {}", e),
+        };
 
-            self.draw_controls(ui);
-            self.draw_rms_meter(ui);
-            self.draw_spectrum_plot(ui);
-
-            ctx.request_repaint()
+        egui::TopBottomPanel::top("Panels").show(ctx, |ui| {
+            self.draw_panel_selection(ui);
         });
+
+        match self.panel {
+            Panel::AudioVisualization => {
+                egui::SidePanel::right("Settings").show(ctx, |ui| {
+                    self.draw_controls(ui);
+                });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    self.draw_rms_meter(ui);
+                    self.draw_spectrum_plot(ui);
+                });
+            }
+
+            Panel::Leds => {}
+        }
+
+        ctx.request_repaint()
     }
 }
 
 impl App {
+    fn draw_panel_selection(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for p in Panel::iter() {
+                ui.selectable_value(&mut self.panel, p, p.to_string());
+            }
+        });
+    }
+
     fn draw_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.add(egui::Slider::new(&mut self.spectrum_slope, 0.0..=6.0));
