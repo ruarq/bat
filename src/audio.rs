@@ -6,12 +6,10 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    thread,
-    time::Duration,
 };
 use strum::{Display, EnumIter};
 
-pub const RING_BUFFER_CAPACITY: usize = 8192;
+pub const RINGBUFFER_CAPACITY: usize = 8192 * 4;
 pub const CROSSBEAM_CHANNEL_CAPACITY: usize = 1;
 
 #[derive(Clone)]
@@ -34,16 +32,42 @@ impl Default for AnalysisData {
 #[derive(Debug, PartialEq, Clone, Copy, EnumIter, Display)]
 #[repr(usize)]
 pub enum AudioBufferSize {
+    Microscopic = 1 << 8,
+    Mini = 1 << 9,
     Small = 1 << 10,
     Medium = 1 << 11,
     Big = 1 << 12,
     Huge = 1 << 13,
+    Insane = 1 << 14,
+    Otherworldy = 1 << 15,
+    Ungodly = 1 << 16,
+    ThereIsNoLimit = 1 << 17,
+    OrIsThere = 1 << 18,
+    ThisIsBlasphemy = 1 << 19,
+    JustOneMoreSetting = 1 << 20,
+    YourComputerIsASmokeMachine = 1 << 21,
 }
 
 impl Default for AudioBufferSize {
     fn default() -> Self {
-        Self::Medium
+        Self::Huge
     }
+}
+
+const SAMPLE_RATE_AUDIO: u32 = 44_100;
+const SAMPLE_RATE_VIDEO: u32 = 48_000;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, EnumIter, Display)]
+#[repr(u32)]
+pub enum SampleRate {
+    Audio = SAMPLE_RATE_AUDIO,
+    Video = SAMPLE_RATE_VIDEO,
+    Audio2 = SAMPLE_RATE_AUDIO * 2,
+    Video2 = SAMPLE_RATE_VIDEO * 2,
+    Audio4 = SAMPLE_RATE_AUDIO * 4,
+    Video4 = SAMPLE_RATE_VIDEO * 4,
+    Audio8 = SAMPLE_RATE_AUDIO * 8,
+    Video8 = SAMPLE_RATE_VIDEO * 8,
 }
 
 pub fn analyze_audio(
@@ -117,15 +141,17 @@ pub fn analyze_audio(
             spectrum: spectrum.iter().map(|c| c.re.abs()).collect(),
         }) {
             Ok(()) => {}
-            Err(_) =>
-                /* eprintln!("failed to send analysis data: {}", e) */
-                {}
+            Err(e) => {
+                eprintln!("analysis thread: {}", e);
+                return;
+            }
         }
     }
 }
 
 pub fn build_audio_input_stream(
     device_index: usize,
+    sample_rate: SampleRate,
     mut producer: rtrb::Producer<f32>,
 ) -> (cpal::Host, cpal::Stream, cpal::StreamConfig) {
     let host = cpal::default_host();
@@ -143,31 +169,33 @@ pub fn build_audio_input_stream(
             .unwrap_or(String::from("couldn't obtain name"))
     );
 
-    let config = device
-        .default_input_config()
-        .expect("no device input config");
-    let format = config.sample_format();
-    let channels = config.channels();
-    let config = config.into();
+    let config = cpal::StreamConfig {
+        channels: 2,
+        sample_rate: cpal::SampleRate(sample_rate as u32),
+        buffer_size: cpal::BufferSize::Default,
+    };
 
-    eprintln!("using {}@{}ch", format, channels);
+    eprintln!("  {:?}", config);
 
-    let data_callback = move |data: &[f32], _info: &cpal::InputCallbackInfo| match producer
-        .write_chunk_uninit(data.len())
-    {
-        Ok(chunk) => {
-            chunk.fill_from_iter(data.iter().copied());
+    //eprintln!("using {}@{}ch", format, channels);
+
+    let data_callback = move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+        assert!(RINGBUFFER_CAPACITY >= data.len());
+        match producer.write_chunk_uninit(data.len()) {
+            Ok(chunk) => {
+                chunk.fill_from_iter(data.iter().copied());
+            }
+            Err(e) => {
+                eprintln!("audio thread: {}", e);
+            }
         }
-        Err(_) => { /* eprintln!("error pushing audio data: {}", e); */ }
     };
 
     let err_fn = |err| eprintln!("input stream error: {}", err);
 
-    let stream = match format {
-        cpal::SampleFormat::F32 => device.build_input_stream(&config, data_callback, err_fn, None),
-        format => panic!("unsupported format: {}", format),
-    }
-    .expect("couldn't build input stream");
+    let stream = device
+        .build_input_stream(&config, data_callback, err_fn, None)
+        .expect("failed to build input stream");
 
     (host, stream, config)
 }
