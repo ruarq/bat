@@ -165,6 +165,13 @@ impl App {
         if audio_device_index_before != self.audio_device_index {
             self.reinit_audio_input_stream();
         }
+
+        ui.add(egui::Label::new(format!(
+            "{}ms per buffer",
+            ((self.audio_buffer_size_selected as usize) as f32
+                / (self.sample_rate as usize) as f32)
+                * 1000.0
+        )));
     }
 
     fn reinit_audio_input_stream(&mut self) {
