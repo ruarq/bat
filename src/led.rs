@@ -59,8 +59,6 @@ impl LedStrip {
         let map_freq_to_led_idx = |f: f32| {
             let range = max_freq.log10() - min_freq.log10();
             let x = (f.log10() - min_freq.log10()) / range;
-            //eprintln!("{}, {}", min_freq, max_freq.log10());
-            //eprintln!("{} - {} / {} = {}", f.log10(), min_freq.log10(), range, x);
             (x * (num_leds - 1) as f32) as usize
         };
 

@@ -275,6 +275,9 @@ impl App {
 
         ui.heading("Audio stream");
 
+        ui.add(egui::Slider::new(&mut self.meter_range.0, -96.0..=6.0));
+        ui.add(egui::Slider::new(&mut self.meter_range.1, -96.0..=6.0));
+
         if ui
             .add(egui::Button::new(if self.stream_playing {
                 "playing"
