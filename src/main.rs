@@ -155,18 +155,9 @@ impl eframe::App for App {
                         match strip_num % 3 {
                             0 => strip.amp(meter),
                             1 => strip.biamp(meter),
-                            2 => strip.spectrum(
-                                &spectrum,
-                                &audio::frequencies(spectrum.len() as u32, self.sample_rate as u32),
-                            ),
+                            2 => strip.amps(&spectrum[0..strip.data.len()]),
                             _ => panic!("impossible"),
                         }
-
-                        //if strip_num % 2 == 0 {
-                        //    strip.amp(meter);
-                        //} else {
-                        //    strip.biamp(meter);
-                        //};
 
                         let (response, painter) = ui.allocate_painter(
                             egui::vec2(strip.data.len() as f32 * (w + 1.0), h),
@@ -275,8 +266,14 @@ impl App {
 
         ui.heading("Audio stream");
 
-        ui.add(egui::Slider::new(&mut self.meter_range.0, -96.0..=6.0));
-        ui.add(egui::Slider::new(&mut self.meter_range.1, -96.0..=6.0));
+        ui.add(egui::Slider::new(
+            &mut self.meter_range.0,
+            -96.0..=(self.meter_range.1 - 0.1),
+        ));
+        ui.add(egui::Slider::new(
+            &mut self.meter_range.1,
+            self.meter_range.0..=6.0,
+        ));
 
         if ui
             .add(egui::Button::new(if self.stream_playing {

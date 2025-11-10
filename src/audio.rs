@@ -252,7 +252,25 @@ pub fn smooth_lin(window_size: usize, spectrum: &mut [f32]) {
         .for_each(|(s, t)| *s = t);
 }
 
-fn make_log_bands(start_freq: f32, max_freq: f32, ratio: f32) -> Vec<f32> {
+//pub fn make_stepped_lin_bands(mut min_freq: f32, max_freq: f32, step: f32) -> Vec<f32> {
+//    assert!(min_freq < max_freq && step > 0.0);
+//    let mut bands = Vec::with_capacity(((max_freq - min_freq) / step) as usize);
+//
+//    while min_freq <= max_freq {
+//        bands.push(min_freq);
+//        min_freq += step;
+//    }
+//
+//    bands
+//}
+//
+//pub fn make_lin_bands(mut min_freq: f32, num_bands: usize, step: f32) -> Vec<f32> {
+//    assert!(step > 0.0);
+//
+//    (0..num_bands).map(|i| min_freq + step * i as f32).collect()
+//}
+
+pub fn make_log_bands(start_freq: f32, max_freq: f32, ratio: f32) -> Vec<f32> {
     let mut bands = Vec::new();
     let mut freq = start_freq;
 
@@ -297,5 +315,3 @@ pub fn smooth_log(
 
     (smooth_spectrum, frequencies)
 }
-//
-//pub fn translate

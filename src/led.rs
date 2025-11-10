@@ -1,3 +1,5 @@
+use crate::audio;
+
 type Rgb = rgb::Rgb<u8>;
 
 pub struct LedStrip {
@@ -48,25 +50,14 @@ impl LedStrip {
         }
     }
 
-    pub fn spectrum(&mut self, spectrum: &[f32], frequencies: &[f32]) {
-        assert_eq!(spectrum.len(), frequencies.len());
+    pub fn amps(&mut self, amps: &[f32]) {
+        assert_eq!(self.data.len(), amps.len());
 
-        let min_freq = frequencies[0];
-        let max_freq = frequencies[frequencies.len() - 1];
-
-        let num_leds = self.data.len();
-
-        let map_freq_to_led_idx = |f: f32| {
-            let range = max_freq.log10() - min_freq.log10();
-            let x = (f.log10() - min_freq.log10()) / range;
-            (x * (num_leds - 1) as f32) as usize
-        };
-
-        for (f, v) in frequencies.iter().zip(spectrum) {
-            self.data[map_freq_to_led_idx(*f)] = Rgb {
-                r: (0.0 * v) as u8,
-                g: (0.0 * v) as u8,
-                b: (100.0 * v) as u8,
+        for (rgb, amp) in self.data.iter_mut().zip(amps) {
+            *rgb = Rgb {
+                r: (0.0 * amp) as u8,
+                g: (0.0 * amp) as u8,
+                b: (100.0 * amp) as u8,
             };
         }
     }
