@@ -48,16 +48,18 @@ fn main() -> eframe::Result {
         sample_rate,
         meter_range: (-96.0, 12.0),
         led_strips: vec![
-            LedStrip::with_size(10),
-            LedStrip::with_size(20),
             LedStrip::with_size(30),
-            LedStrip::with_size(40),
-            LedStrip::with_size(50),
+            LedStrip::with_size(30),
+            LedStrip::with_size(30),
             LedStrip::with_size(60),
-            LedStrip::with_size(70),
-            LedStrip::with_size(80),
+            LedStrip::with_size(60),
+            LedStrip::with_size(60),
             LedStrip::with_size(90),
-            LedStrip::with_size(100),
+            LedStrip::with_size(90),
+            LedStrip::with_size(90),
+            LedStrip::with_size(120),
+            LedStrip::with_size(120),
+            LedStrip::with_size(120),
         ],
     };
 
@@ -127,12 +129,12 @@ impl eframe::App for App {
             self.draw_panel_selection(ui);
         });
 
+        egui::SidePanel::right("Settings").show(ctx, |ui| {
+            self.draw_controls(ui);
+        });
+
         match self.panel {
             Panel::AudioVisualization => {
-                egui::SidePanel::right("Settings").show(ctx, |ui| {
-                    self.draw_controls(ui);
-                });
-
                 egui::CentralPanel::default().show(ctx, |ui| {
                     self.draw_rms_meter(ui);
                     self.draw_spectrum_plot(ui);
