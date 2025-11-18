@@ -1,10 +1,14 @@
 mod audio;
+mod discovery;
+mod gradient;
 mod led;
 
 use audio::{AnalysisData, AudioBufferSize};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use discovery::{Discovery, DiscoveryConfig};
 use led::LedStrip;
 use std::{
+    net::{SocketAddr, UdpSocket},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -28,6 +32,23 @@ fn main() -> eframe::Result {
     let (host, stream, stream_config) = audio::build_audio_input_stream(0, sample_rate, producer);
     stream.play().unwrap();
 
+    let (client_queue_sender, client_queue_receiver) = crossbeam_channel::unbounded();
+
+    let mut discovery = Discovery::new(
+        DiscoveryConfig::default(),
+        move |socket, message, sender| {
+            if message == "beatstrip client discovery request".as_bytes() {
+                let message = "beatstrip discovery ok".as_bytes();
+                let bytes_sent = socket.send_to(message, sender).unwrap_or(0);
+                if bytes_sent == message.len() {
+                    client_queue_sender.send(sender).unwrap();
+                }
+            }
+        },
+    );
+
+    discovery.start().unwrap();
+
     let app = App {
         panel: Default::default(),
         host,
@@ -48,19 +69,15 @@ fn main() -> eframe::Result {
         sample_rate,
         meter_range: (-96.0, 12.0),
         led_strips: vec![
-            LedStrip::with_size(30),
-            LedStrip::with_size(30),
-            LedStrip::with_size(30),
             LedStrip::with_size(60),
             LedStrip::with_size(60),
             LedStrip::with_size(60),
-            LedStrip::with_size(90),
-            LedStrip::with_size(90),
-            LedStrip::with_size(90),
-            LedStrip::with_size(120),
-            LedStrip::with_size(120),
-            LedStrip::with_size(120),
+            LedStrip::with_size(60),
         ],
+        master_gain: 1.0,
+        client_queue_receiver,
+        clients: Vec::new(),
+        socket: UdpSocket::bind("0.0.0.0:25120").unwrap(),
     };
 
     let options = eframe::NativeOptions {
@@ -116,14 +133,58 @@ struct App {
     sample_rate: audio::SampleRate,
     meter_range: (f32, f32),
     led_strips: Vec<LedStrip>,
+    master_gain: f32,
+    client_queue_receiver: crossbeam_channel::Receiver<SocketAddr>,
+    clients: Vec<SocketAddr>,
+    socket: UdpSocket,
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         match self.receiver.try_recv() {
-            Ok(data) => self.analysis_data = data,
+            Ok(mut data) => {
+                data.rms_meter.0 *= self.master_gain;
+                data.rms_meter.1 *= self.master_gain;
+                data.spectrum
+                    .iter_mut()
+                    .for_each(|s| *s *= *s * self.master_gain);
+                self.analysis_data = data;
+            }
             Err(e) => eprintln!("ui thread: {}", e),
         };
+
+        match self.client_queue_receiver.try_recv() {
+            Ok(addr) => self.clients.push(addr),
+            Err(_) => {}
+        }
+
+        for client in self.clients.iter() {
+            let mut strip = LedStrip::with_size(60);
+
+            let mut spectrum = self.analysis_data.spectrum.clone();
+            spectrum
+                .iter_mut()
+                .for_each(|s| *s = audio::make_meter(audio::as_decibel(*s), self.meter_range));
+            use SpectrumSmoothing::*;
+            match self.spectrum_smoothing {
+                None => {}
+                Linear => audio::smooth_lin(self.spectrum_smoothing_lin, &mut spectrum),
+                Logarithmic => {
+                    (spectrum, _) = audio::smooth_log(
+                        self.spectrum_smoothing_log,
+                        self.sample_rate as u32,
+                        &spectrum,
+                    );
+                }
+            }
+            audio::tilt(self.spectrum_slope, &mut spectrum);
+
+            strip.biamps(&spectrum[..strip.data.len()]);
+
+            self.socket
+                .send_to(bytemuck::cast_slice(&strip.data), client)
+                .unwrap();
+        }
 
         egui::TopBottomPanel::top("Panels").show(ctx, |ui| {
             self.draw_panel_selection(ui);
@@ -144,38 +205,59 @@ impl eframe::App for App {
             Panel::Leds => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (w, h) = (10.0, 10.0);
-                    for (strip_num, strip) in &mut self.led_strips.iter_mut().enumerate() {
-                        let rms =
-                            (self.analysis_data.rms_meter.0 + self.analysis_data.rms_meter.1) / 2.0;
-                        let meter = audio::make_meter(audio::as_decibel(rms), self.meter_range);
-                        let mut spectrum = self.analysis_data.spectrum.clone();
-                        spectrum.iter_mut().for_each(|s| {
-                            *s = audio::make_meter(audio::as_decibel(*s), self.meter_range)
-                        });
-                        audio::tilt(self.spectrum_slope, &mut spectrum);
+                    for strip_num in 0..5 {
+                        for strip in &mut self.led_strips.iter_mut() {
+                            let rms = (self.analysis_data.rms_meter.0
+                                + self.analysis_data.rms_meter.1)
+                                / 2.0;
+                            let meter = audio::make_meter(audio::as_decibel(rms), self.meter_range);
+                            let mut spectrum = self.analysis_data.spectrum.clone();
+                            spectrum.iter_mut().for_each(|s| {
+                                *s = audio::make_meter(audio::as_decibel(*s), self.meter_range)
+                            });
 
-                        match strip_num % 3 {
-                            0 => strip.amp(meter),
-                            1 => strip.biamp(meter),
-                            2 => strip.amps(&spectrum[0..strip.data.len()]),
-                            _ => panic!("impossible"),
-                        }
+                            use SpectrumSmoothing::*;
+                            match self.spectrum_smoothing {
+                                None => {}
+                                Linear => {
+                                    audio::smooth_lin(self.spectrum_smoothing_lin, &mut spectrum)
+                                }
+                                Logarithmic => {
+                                    (spectrum, _) = audio::smooth_log(
+                                        self.spectrum_smoothing_log,
+                                        self.sample_rate as u32,
+                                        &spectrum,
+                                    );
+                                }
+                            }
 
-                        let (response, painter) = ui.allocate_painter(
-                            egui::vec2(strip.data.len() as f32 * (w + 1.0), h),
-                            egui::Sense::hover(),
-                        );
+                            audio::tilt(self.spectrum_slope, &mut spectrum);
 
-                        for (i, rgb) in strip.data.iter().enumerate() {
-                            let (x, y) = (w * i as f32, 0.0);
-                            painter.rect_filled(
-                                egui::Rect {
-                                    min: response.rect.min + egui::vec2(x, y),
-                                    max: response.rect.min + egui::vec2(x + w, y + h),
-                                },
-                                egui::CornerRadius::ZERO,
-                                egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b),
+                            match strip_num % 5 {
+                                0 => strip.amp(meter),
+                                1 => strip.amp(1.0 - meter),
+                                2 => strip.biamp(meter),
+                                3 => strip.amps(&spectrum[..strip.data.len()]),
+                                4 => strip.biamps(&spectrum[..strip.data.len()]),
+                                _ => panic!("impossible"),
+                            }
+
+                            let (response, painter) = ui.allocate_painter(
+                                egui::vec2(strip.data.len() as f32 * (w + 1.0), h),
+                                egui::Sense::hover(),
                             );
+
+                            for (i, rgb) in strip.data.iter().enumerate() {
+                                let (x, y) = (w * i as f32, 0.0);
+                                painter.rect_filled(
+                                    egui::Rect {
+                                        min: response.rect.min + egui::vec2(x, y),
+                                        max: response.rect.min + egui::vec2(x + w, y + h),
+                                    },
+                                    egui::CornerRadius::ZERO,
+                                    egui::Color32::from_rgb(rgb.r(), rgb.g(), rgb.b()),
+                                );
+                            }
                         }
                     }
                 });
@@ -268,14 +350,20 @@ impl App {
 
         ui.heading("Audio stream");
 
-        ui.add(egui::Slider::new(
-            &mut self.meter_range.0,
-            -96.0..=(self.meter_range.1 - 0.1),
-        ));
-        ui.add(egui::Slider::new(
-            &mut self.meter_range.1,
-            self.meter_range.0..=6.0,
-        ));
+        ui.label("Master Gain");
+        ui.add(egui::Slider::new(&mut self.master_gain, 0.0..=2.0));
+
+        ui.label("Meter range");
+        ui.group(|ui| {
+            ui.add(egui::Slider::new(
+                &mut self.meter_range.0,
+                -96.0..=(self.meter_range.1 - 0.1),
+            ));
+            ui.add(egui::Slider::new(
+                &mut self.meter_range.1,
+                self.meter_range.0..=6.0,
+            ));
+        });
 
         if ui
             .add(egui::Button::new(if self.stream_playing {

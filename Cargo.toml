@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 atomic_float = "1.1.0"
+bytemuck = "1.24.0"
 cpal = "0.16.0"
 crossbeam-channel = "0.5.15"
 eframe = "0.33.0"
@@ -13,6 +14,5 @@ egui_extras = "0.33.0"
 egui_plot = "0.34.0"
 ndarray = "0.17.1"
 realfft = "3.5.0"
-rgb = "0.8.52"
 rtrb = "0.3.2"
 strum = { version = "0.27.2", features = ["derive"] }
